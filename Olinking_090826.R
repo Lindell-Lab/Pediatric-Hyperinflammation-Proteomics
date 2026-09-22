@@ -2,11 +2,10 @@
 library(tidyverse)
 library(dplyr)
 
-## Load and process data ##
-
+## Load and process data
 set.seed(3158)
-setwd("C:/Users/USER/Documents/Olinking")
-olinking_df <- read_csv("C:/Users/USER/Documents/Olinking/final_df_meta_012826.csv")
+setwd("C:/Users/USER/OneDrive/Documents/Research/Olinking")
+olinking_df <- read_csv("C:/Users/USER/OneDrive/Documents/Research/Olinking/final_df_meta_012826.csv")
 olinking_df <- olinking_df %>% mutate(case_control = case_when(
   Condition=="COVID_healthy" ~ "Control",
   Condition=="COVID_minimal" ~ "Case",
@@ -19,9 +18,11 @@ olinking_df <- olinking_df %>% mutate(case_control = case_when(
 olinking_df$case_control <- factor(olinking_df$case_control, levels=c("Case", "Control"))
 
 # Impute IL6 and IL6R a priori
-olinking_df <- olinking_df %>% select(-"IL6R")
+olinking_df <- olinking_df %>% select(-"IL6R", -"IL6")
 
 # Select the peak timepoint for each patient
+# Peak timepoint 1 for most patients (time of diagnosis and enrollment)
+# CRS patients with pre-CAR-T (Timepoint=="1") and post-CAR-T (Timepoint=="2") samples, Timepoint=="3" at onset of CRS, Timepoint=="4" at onset of severe CRS per Penn Scale
 olinking_df <- olinking_df %>% mutate(peak_timepoint = case_when(
   Condition=="COVID_healthy" & Timepoint=="1" ~ "Peak",
   Condition=="COVID_minimal" & Timepoint=="1" ~ "Peak",
@@ -35,15 +36,13 @@ olinking_df <- olinking_df %>% mutate(peak_timepoint = case_when(
 olinking_df %>% group_by(peak_timepoint) %>% count()
 olinking_df %>% group_by(peak_timepoint, Condition) %>% count()
 olinking_df_peak <- filter(olinking_df, peak_timepoint=="Peak")
-olinking_df_peak <- olinking_df_peak %>% filter(Condition != "COVID_healthy")
 
-olinking_data_labels <- read_csv("C:/Users/USER/Documents/Olinking/olink_data_labels.csv")
+olinking_data_labels <- read_csv("C:/Users/USER/OneDrive/Documents/Research/Olinking/olink_data_labels.csv")
 olinking_data_labels <- olinking_data_labels %>% filter(Assay != "IL6")
 olinking_df_peak_long <- olinking_df_peak %>%
   pivot_longer(cols = where(is.numeric), names_to = "Assay", values_to = "NPX")
 olinking_df_peak_long <- left_join(olinking_df_peak_long, olinking_data_labels)
 rm(olinking_data_labels)
-olinking_df_peak_long <- olinking_df_peak_long %>% filter(Condition != "COVID_healthy")
 
 olinking_df_peak_wide <- olinking_df_peak_long %>%
   select("SubjectID", "Condition", "case_control", "Assay", "NPX") %>%
@@ -55,7 +54,6 @@ table(olinking_df_peak_wide$Condition)
 ##----------------------------------------------------------------------------##
 
 ## PCA and UMAP for dimensionality reduction and visualization
-library("OlinkAnalyze")
 library("umap")
 library("FactoMineR")
 library("factoextra")
@@ -86,7 +84,7 @@ colnames(pca_scores)[1:2] <- c("PC1", "PC2")
 pc1_var <- round(olinking_pca$eig[1, 2], 1)
 pc2_var <- round(olinking_pca$eig[2, 2], 1)
 
-# Plot with ggplot: all solid circles, custom colors
+# Plot with ggplot
 ggplot(pca_scores, aes(x = PC1, y = PC2, color = Condition)) +
   geom_point(
     shape = 21, 
@@ -134,47 +132,6 @@ top10_PC2
 fviz_eig(olinking_pca, addlabels = TRUE, ylim = c(0, 50), ncp=15) #at PC15 Eigenvalue is <1%
 summary(olinking_pca) #cum var >70% at Dim17, cum var >80% at Dim23
 
-# Extract loadings (coordinates of variables on PCs)
-loadings <- olinking_pca$var$coord
-
-# Top 10 positive for PC1
-top_pc1 <- sort(abs(loadings[, "Dim.1"]), decreasing = TRUE)[1:10]
-names_pc1 <- names(top_pc1)
-
-top_loadings_df_pc1 <- as_tibble(loadings, rownames = "Protein") %>%
-  mutate(abs_PC1 = abs(Dim.1), abs_PC2 = abs(Dim.2)) %>%
-  arrange(desc(abs_PC1)) %>%
-  slice(1:10) %>%
-  select(Protein, Dim.1)
-
-# Top 10 most negative for PC1
-neg_pc1 <- sort(loadings[, "Dim.1"])[1:10]
-names_neg_pc1 <- names(neg_pc1)
-
-neg_loadings_pc1 <- as_tibble(loadings, rownames = "Protein") %>%
-  arrange(Dim.1) %>%
-  slice(1:10) %>%
-  select(Protein, Dim.1)
-
-# Top 10 positive for PC2
-top_pc2 <- sort(abs(loadings[, "Dim.2"]), decreasing = TRUE)[1:10]
-names_pc2 <- names(top_pc2)
-
-top_loadings_df_pc2 <- as_tibble(loadings, rownames = "Protein") %>%
-  mutate(abs_PC2 = abs(Dim.2)) %>%
-  arrange(desc(abs_PC2)) %>%
-  slice(1:10) %>%
-  select(Protein, Dim.2)
-
-# Top 10 most negative for PC2
-neg_pc2 <- sort(loadings[, "Dim.2"])[1:10]
-names_neg_pc2 <- names(neg_pc2)
-
-neg_loadings_pc2 <- as_tibble(loadings, rownames = "Protein") %>%
-  arrange(Dim.2) %>%
-  slice(1:10) %>%
-  select(Protein, Dim.2)
-
 # Set up PCA data as matrix
 pca_data <- as.matrix(olinking_pca$ind$coord)
 
@@ -206,97 +163,13 @@ ggplot(umap_df, aes(x = UMAP1, y = UMAP2, color = Condition)) +
        ) +
   guides(color = guide_legend(order = 1))
 
-
 ##----------------------------------------------------------------------------##
 
-
-## PCA and UMAP for dimensionality reduction and visualization with Healthy omitted
-
-olinking_df_filtered <- olinking_df_peak %>%
-  filter(Condition != "Sepsis_Healthy Control")
-
-# Define custom colors
-custom_colors <- c(
-  "CRS_severe" = "#CC33FF",
-  "Sepsis_MODS" = "#E6004C",
-  "COVID_MISC" = "#FF9900",
-  "COVID_severe" = "#FFCC00",
-  "COVID_minimal" = "#33CC33",
-  "CRS_minimal" = "#3399FF")
-
-olinking_df_filtered$Condition <- factor(olinking_df_filtered$Condition,
-                                     levels = names(custom_colors))
-
-# PCA for overall data architecture
-olinking_pca <- PCA(olinking_df_filtered[,2:545], ncp = 20, scale.unit = TRUE, graph = FALSE)
-
-fviz_pca_ind(olinking_pca,
-             geom.ind = "point",
-             pointsize = 2,
-             alpha = 0.8,
-             col.ind = olinking_df_filtered$Condition,
-             addEllipses = TRUE,
-             ellipse.level = 0.95,
-             ellipse.type = "confidence",
-             repel = TRUE,
-             title = "",
-             legend.title = "Condition") +
-  scale_color_manual(values = custom_colors) +
-  scale_fill_manual(values = custom_colors) +
-  scale_shape_manual(values = c(8, 12, 13, 15, 2, 17, 16)) +
-  theme(
-    text = element_text(size = 16),               # Global text size
-    axis.title = element_text(size = 16),         # Axis titles
-    axis.text = element_text(size = 16),          # Axis tick labels
-    legend.title = element_text(size = 16),       # Legend title
-    legend.text = element_text(size = 16),        # Legend labels
-    plot.title = element_text(size = 16, face = "bold")  # Plot title
-  )
-
-fviz_eig(olinking_pca, addlabels = TRUE, ylim = c(0, 50), ncp=15) #at PC15 Eigenvalue is <1%
-summary(olinking_pca) #cum var >70% at Dim17, cum var >80% at Dim23
-
-# Set up PCA data as matrix
-pca_data <- as.matrix(olinking_pca$ind$coord)
-
-# Run UMAP
-olinking_UMAP <- umap::umap(pca_data, n_neighbors = 15, min_dist = 0.1, spread = 1.0)
-
-# Create a data frame for UMAP results
-umap_df <- as.data.frame(olinking_UMAP$layout)
-colnames(umap_df) <- c("UMAP1", "UMAP2")
-
-# Add condition labels
-umap_df$Condition <- olinking_df_filtered$Condition
-
-# Ensure the levels of the Condition factor are ordered and renamed
-umap_df$Condition <- factor(umap_df$Condition, levels = c("COVID_minimal", "COVID_severe", "COVID_MISC","CRS_minimal", "CRS_severe", "Sepsis_MODS"))
-
-# Plot UMAP results
-ggplot(umap_df, aes(x = UMAP1, y = UMAP2, color = Condition)) +
-  geom_point(size = 2.5, alpha = 0.8) +
-  scale_color_manual(values = custom_colors) +
-  theme_minimal() +
-  labs(title = "UMAP of PCA Results with Healthy Patients Omitted", x = "UMAP1", y = "UMAP2") +
-  theme(
-    legend.text = element_text(size = 16),
-    legend.title = element_text(size = 16),   
-    axis.title = element_text(size = 16), 
-    axis.text = element_text(size = 16),
-    plot.title = element_text(size = 16, hjust = 0.5)
-  ) +
-  guides(color = guide_legend(order = 1))
-
-
-##----------------------------------------------------------------------------##
-
-
-## Extract top features in UMAP1 and UMAP2 (with healthies included)
-library(dplyr)
+## Extract top features in UMAP1 and UMAP2
 library(xgboost)
 library(ggplot2)
 
-X_prot <- olinking_df_peak %>%  select(,2:545) %>% select(where(is.numeric))
+X_prot <- olinking_df_peak %>%  select(2:545) %>% select(where(is.numeric))
 stopifnot(nrow(X_prot) == nrow(umap_df))
 
 X_mat <- scale(as.matrix(X_prot))
@@ -322,57 +195,7 @@ spearman_umap2 <- spearman_rank_axis(umap_df$UMAP2, X_mat, feature_names)
 head(spearman_umap1, 20)
 head(spearman_umap2, 20)
 
-# XGBoost to predict UMAP1/UMAP2 from proteins
-
-xgb_cv_train_axis <- function(y, X_mat, seed = 3158) {
-  set.seed(seed)
-  d <- xgb.DMatrix(data = X_mat, label = y)
-  
-  params_reg <- list(
-    objective = "reg:squarederror",
-    eval_metric = "rmse",
-    max_depth = 4,
-    eta = 0.1,
-    subsample = 1,
-    colsample_bytree = 1,
-    lambda = 5,
-    alpha = 5,
-    gamma = 1
-  )
-  
-  cv <- xgb.cv(
-    params = params_reg,
-    data = d,
-    nrounds = 2000,
-    nfold = 5,
-    early_stopping_rounds = 25,
-    verbose = 0
-  )
-  
-  best_nrounds <- cv$best_iteration
-  
-  model <- xgb.train(
-    params = params_reg,
-    data = d,
-    nrounds = best_nrounds,
-    verbose = 0
-  )
-  
-  imp <- xgb.importance(feature_names = colnames(X_mat), model = model)
-  
-  list(cv = cv, best_nrounds = best_nrounds, model = model, importance = imp)
-}
-
-fit_umap1 <- xgb_cv_train_axis(umap_df$UMAP1, X_mat, seed = 3158)
-fit_umap2 <- xgb_cv_train_axis(umap_df$UMAP2, X_mat, seed = 3158)
-
-# Top proteins by XGBoost gain
-head(fit_umap1$importance, 20)
-head(fit_umap2$importance, 20)
-
-
 ##----------------------------------------------------------------------------##
-
 
 ## Run ssGSVA and prepare matrix for heatmap
 library("GSVA")
@@ -409,8 +232,6 @@ param <- gsvaParam(
 # Run GSVA
 gsva_scores <- gsva(param)
 
-
-## Statistical analyses
 # Convert gsva_scores to dataframe
 gsva_df <- as.data.frame(t(gsva_scores))
 
@@ -440,8 +261,6 @@ condition_vector <- dplyr::recode(
   "Sepsis_MODS" = "Sepsis (n=35)"
 )
 
-gsva_df <- as.data.frame(t(gsva_scores))
-
 gsva_df$Condition <- factor(
   condition_vector,
   levels = c(
@@ -458,8 +277,44 @@ gsva_df$Condition <- factor(
 # Label pathway columns
 hallmark_cols <- grep("^HALLMARK_", names(gsva_df), value = TRUE)
 
+# Kruskal-Wallis omnibus test
+library(rstatix)
+library(tidyr)
 
-## Row normalize and then create heatmap
+gsva_long <- gsva_df %>%
+  select(all_of(hallmark_cols), Condition) %>%
+  pivot_longer(cols = all_of(hallmark_cols), names_to = "pathway", values_to = "score")
+
+kw_results <- gsva_long %>%
+  group_by(pathway) %>%
+  kruskal_test(score ~ Condition) %>%
+  ungroup()
+
+fdr_method <- "BH"
+
+kw_results$p_adj <- p.adjust(kw_results$p, method = fdr_method)
+kw_results <- kw_results %>% arrange(p_adj)
+kw_results
+
+library(writexl)
+write_xlsx(kw_results, "Supplemental Digital content 2.xlsx")
+
+# Dunn's post-hoc cross-condition pairwise comparisons w/ BH correction
+dunn_raw <- gsva_long %>%
+  group_by(pathway) %>%
+  dunn_test(score ~ Condition, p.adjust.method = "none") %>%
+  ungroup()
+
+dunn_raw$p_adj_global <- p.adjust(dunn_raw$p, method = fdr_method)
+
+dunn_results <- dunn_raw %>% arrange(p_adj_global)
+dunn_results
+
+dunn_results %>% filter(p_adj_global < 0.05)
+
+write_xlsx(dunn_results, "Supplemental Digital content 3.xlsx")
+
+# Row normalize and then create heatmap
 # Define row-wise min-max normalization function
 min_max_scale <- function(x) {
   rng <- range(x, na.rm = TRUE)
@@ -470,13 +325,11 @@ min_max_scale <- function(x) {
 # Apply to each row of the matrix
 gsva_scores_rescaled <- apply(gsva_scores, 1, min_max_scale)
 
-
-## Create the heatmap
+# Create the heatmap
 library(ComplexHeatmap)
 library(circlize)
 library(grid)
 
-# Select pathways of interest then rename
 selected_pathways <- c(
   "HALLMARK_TNFA_SIGNALING_VIA_NFKB", 
   "HALLMARK_IL6_JAK_STAT3_SIGNALING", 
@@ -495,8 +348,6 @@ geneset_names <- c(
 
 # Subset and rename matrix rows
 gsva_scores_rescaled <- t(gsva_scores_rescaled)
-
-gsva_scores_subset <- gsva_scores_rescaled[selected_pathways, ]
 
 # Define condition factor for column splitting and relabel
 condition_factor <- factor(
@@ -549,8 +400,6 @@ ha_col <- HeatmapAnnotation(
   show_legend = TRUE
 )
 
-row_ha <- rowAnnotation(Pathway = geneset_names)
-
 # Define condition levels explicitly
 condition_levels <- c(
   "Healthy Controls (n=26)",
@@ -594,7 +443,6 @@ ComplexHeatmap::Heatmap(gsva_scores_ordered,
 
 
 ## Radar graph to see overlap between Sepsis, MIS-C, and CRS Severe
-library(dplyr)
 library(tidyr)
 library(fmsb)
 
@@ -647,30 +495,7 @@ legend(
   cex = 1.4
 )
 
-
-par(mar = c(4, 4, 4, 4), xpd = TRUE)
-par(mar = c(10, 10, 10, 10))   # huge margins push labels off the plot
-
-par(mar = c(12, 12, 12, 12), xpd = TRUE)
-
-radarchart(
-  df_radar_final,
-  axistype = 1,
-  pcol = c("#3399FF", "#E6004C", "#FF9900", "#CC33FF"),
-  pfcol = c("#3399FF40", "#E6004C40", "#FF990040", "#CC33FF40"),
-  plwd = 3,
-  plty = 1,
-  cglcol = "grey80",
-  cglty = 1,
-  cglwd = 0.6,
-  axislabcol = "grey20",
-  vlcex = 0.0001,     # shrinks pathway labels to invisible
-  cex = 1.2
-)
-
-
 ##----------------------------------------------------------------------------##
-
 
 ## Use XGBoost to identify minimal set of proteins that differentiate MIS-C from Sepsis
 # Remove rows & columns not being used for feature ranking
@@ -701,13 +526,9 @@ labels_vector <- as.numeric(binary_df_MISC_sepsis[["Condition_binary"]])
 print(dim(features_matrix))
 print(length(labels_vector))
 
-## Train XGBoost on all patients
-library(xgboost)
-library(dplyr)
-library(ggplot2)
+library(caret)
 
 set.seed(3158)
-dall <- xgb.DMatrix(data = features_matrix, label = labels_vector)
 feature_names <- colnames(features)
 
 # Define model parameters
@@ -723,41 +544,70 @@ params <- list(
   gamma = 1
 )
 
-# Train model 
-xgb_model <- xgb.train(
-params = params,
-data = dall,
-nrounds = 500,
-verbose = 1
-)
+# Train XGBoost using repeated stratified 5-fold CV (no bootstrap) for feature-importance stability
+set.seed(3158)
+feature_names <- colnames(features)
 
-## Top Proteins by Gain
-importance <- xgb.importance(feature_names = feature_names, model = xgb_model)
+n_reps <- 40   # 40 repeats x nfold = 200 total fold-fits (matches old n_boot = 200)
+top_n <- 10
+nfold <- 5
+nrounds_max <- 500
+early_stopping_rounds <- 20
 
-library(dplyr)
+feature_counts <- setNames(numeric(length(feature_names)), feature_names)
+best_nrounds_used <- c()
+cv_aucpr <- c()
 
-top10_MISC <- importance %>%
+for (rep in seq_len(n_reps)) {
+  fold_ids <- caret::createFolds(factor(labels_vector), k = nfold, list = FALSE)
+  
+  for (k in seq_len(nfold)) {
+    test_idx  <- which(fold_ids == k)
+    train_idx <- setdiff(seq_len(length(labels_vector)), test_idx)
+    
+    dtrain <- xgb.DMatrix(data = features_matrix[train_idx, , drop = FALSE],
+                          label = labels_vector[train_idx])
+    dtest  <- xgb.DMatrix(data = features_matrix[test_idx, , drop = FALSE],
+                          label = labels_vector[test_idx])
+    
+    fold_fit <- xgb.train(
+      params = params,
+      data = dtrain,
+      nrounds = nrounds_max,
+      watchlist = list(val = dtest),
+      early_stopping_rounds = early_stopping_rounds,
+      verbose = 0
+    )
+    best_nrounds_used <- c(best_nrounds_used, fold_fit$best_iteration)
+    
+    metric_col <- grep("val.*aucpr$", colnames(fold_fit$evaluation_log), value = TRUE)[1]
+    cv_aucpr <- c(cv_aucpr, fold_fit$evaluation_log[[metric_col]][fold_fit$best_iteration])
+    
+    importance <- xgb.importance(feature_names = feature_names, model = fold_fit)
+    top_feats <- head(importance$Feature, top_n)
+    feature_counts[top_feats] <- feature_counts[top_feats] + 1
+  }
+}
+
+n_boot <- n_reps * nfold
+
+cat("Mean CV-selected nrounds:", mean(best_nrounds_used), "\n")
+cat("Median CV AUCPR:", median(cv_aucpr, na.rm = TRUE), "\n")
+
+# Most frequently selected features
+top10_MISC <- data.frame(
+  Feature = names(feature_counts),
+  times_in_topN = as.integer(feature_counts),
+  pct_of_resamples = round(100 * feature_counts / n_boot, 1)
+) %>%
   as_tibble() %>%
-  arrange(desc(Gain)) %>%
+  arrange(desc(pct_of_resamples)) %>%
   dplyr::slice(1:10)
 
-
-library(ggplot2)
-library(Ckmeans.1d.dp)
-
-xgb.ggplot.importance(importance_matrix = importance, top_n = 10, n_clusters = 1) +
-  geom_bar(stat = "identity", fill = "#3399FF") +  # Override default bar color
-  labs(title = "Top 10 Feature Importances", x = "Feature", y = "Importance (Gain)") +
-  theme_minimal(base_size = 18) +  # Increase base font size
-  theme(
-    axis.title = element_text(size = 18),
-    axis.text = element_text(size = 18),
-    plot.title = element_text(size = 18, face = "bold")
-  )
+top10_MISC
 
 
 ##----------------------------------------------------------------------------##
-
 
 ## Use XGBoost to identify minimal set of proteins that differentiate CRS Severe from Sepsis
 # Remove rows & columns not being used for feature ranking
@@ -788,14 +638,7 @@ labels_vector1 <- as.numeric(binary_df_CRS_sepsis[["Condition_binary"]])
 print(dim(features_matrix1))
 print(length(labels_vector1))
 
-## Train XGBoost on all patients
-library(xgboost)
-library(dplyr)
-library(ggplot2)
-library(caret)
-
 set.seed(3158)
-dall1 <- xgb.DMatrix(data=features_matrix1, label=labels_vector1)
 features_names1 <- colnames(features1)
 
 # Define model parameters
@@ -811,35 +654,64 @@ params <- list(
   gamma = 1
 )
 
-# Train model
-xgb_model1 <- xgb.train(
-  params = params,
-  data = dall1,
-  nrounds = 500,
-  verbose = 1
-)
+# Train XGBoost using repeated stratified 5-fold CV (no bootstrap) for feature-importance stability
+set.seed(3158)
+features_names1 <- colnames(features1)
 
+n_reps1 <- 40
+top_n1 <- 10
+nfold1 <- 5
+nrounds_max1 <- 500
+early_stopping_rounds1 <- 20
 
-## Top Proteins by Gain
-importance1 <- xgb.importance(feature_names = features_names1, model = xgb_model1)
+feature_counts1 <- setNames(numeric(length(features_names1)), features_names1)
+best_nrounds_used1 <- c()
+cv_aucpr1 <- c()
 
-library(dplyr)
+for (rep in seq_len(n_reps1)) {
+  fold_ids1 <- caret::createFolds(factor(labels_vector1), k = nfold1, list = FALSE)
+  
+  for (k in seq_len(nfold1)) {
+    test_idx1  <- which(fold_ids1 == k)
+    train_idx1 <- setdiff(seq_len(length(labels_vector1)), test_idx1)
+    
+    dtrain1 <- xgb.DMatrix(data = features_matrix1[train_idx1, , drop = FALSE],
+                           label = labels_vector1[train_idx1])
+    dtest1  <- xgb.DMatrix(data = features_matrix1[test_idx1, , drop = FALSE],
+                           label = labels_vector1[test_idx1])
+    
+    fold_fit1 <- xgb.train(
+      params = params,
+      data = dtrain1,
+      nrounds = nrounds_max1,
+      watchlist = list(val = dtest1),
+      early_stopping_rounds = early_stopping_rounds1,
+      verbose = 0
+    )
+    best_nrounds_used1 <- c(best_nrounds_used1, fold_fit1$best_iteration)
+    
+    metric_col1 <- grep("val.*aucpr$", colnames(fold_fit1$evaluation_log), value = TRUE)[1]
+    cv_aucpr1 <- c(cv_aucpr1, fold_fit1$evaluation_log[[metric_col1]][fold_fit1$best_iteration])
+    
+    importance1 <- xgb.importance(feature_names = features_names1, model = fold_fit1)
+    top_feats1 <- head(importance1$Feature, top_n1)
+    feature_counts1[top_feats1] <- feature_counts1[top_feats1] + 1
+  }
+}
 
-top10_CRS <- importance1 %>%
+n_boot <- n_reps1 * nfold1
+
+cat("Mean CV-selected nrounds:", mean(best_nrounds_used1), "\n")
+cat("Median CV AUCPR:", median(cv_aucpr1, na.rm = TRUE), "\n")
+
+# Most frequently selected features
+top10_CRS <- data.frame(
+  Feature = names(feature_counts1),
+  times_in_topN = as.integer(feature_counts1),
+  pct_of_resamples = round(100 * feature_counts1 / n_boot, 1)
+) %>%
   as_tibble() %>%
-  arrange(desc(Gain)) %>%
+  arrange(desc(pct_of_resamples)) %>%
   dplyr::slice(1:10)
 
-
-library(ggplot2)
-library(Ckmeans.1d.dp)
-
-xgb.ggplot.importance(importance_matrix = importance1, top_n = 10, n_clusters = 1) +
-  geom_bar(stat = "identity", fill = "#3399FF") +  # Override default bar color
-  labs(title = "Top 10 Feature Importances", x = "Feature", y = "Importance (Gain)") +
-  theme_minimal(base_size = 18) +  # Increase base font size
-  theme(
-    axis.title = element_text(size = 18),
-    axis.text = element_text(size = 18),
-    plot.title = element_text(size = 18, face = "bold")
-  )
+top10_CRS
