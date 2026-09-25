@@ -23,7 +23,7 @@ olinking_df <- olinking_df %>% mutate(case_control = case_when(
   Condition=="Sepsis_MODS" ~ "Case"))
 olinking_df$case_control <- factor(olinking_df$case_control, levels=c("Case", "Control"))
 
-# Impute IL6 and IL6R a priori
+# Exclude IL6 and IL6R a priori
 olinking_df <- olinking_df %>% select(-"IL6R", -"IL6")
 
 # Select the peak timepoint for each patient
