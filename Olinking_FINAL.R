@@ -1,11 +1,17 @@
+##============================================================================##
+# Olinking_FINAL.R
+# Comparative plasma and serum proteomics in pediatric sepsis, MIS-C, and CRS
+# Critical Care Explorations
+##============================================================================##
+
 # Load packages
 library(tidyverse)
 library(dplyr)
+library(here)
 
 ## Load and process data
 set.seed(3158)
-setwd("C:/Users/USER/OneDrive/Documents/Research/Olinking")
-olinking_df <- read_csv("C:/Users/USER/OneDrive/Documents/Research/Olinking/final_df_meta_012826.csv")
+olinking_df <- read_csv(here::here("data", "final_df_meta_FINAL.csv"))
 olinking_df <- olinking_df %>% mutate(case_control = case_when(
   Condition=="COVID_healthy" ~ "Control",
   Condition=="COVID_minimal" ~ "Case",
@@ -21,8 +27,9 @@ olinking_df$case_control <- factor(olinking_df$case_control, levels=c("Case", "C
 olinking_df <- olinking_df %>% select(-"IL6R", -"IL6")
 
 # Select the peak timepoint for each patient
-# Peak timepoint 1 for most patients (time of diagnosis and enrollment)
-# CRS patients with pre-CAR-T (Timepoint=="1") and post-CAR-T (Timepoint=="2") samples, Timepoint=="3" at onset of CRS, Timepoint=="4" at onset of severe CRS per Penn Scale
+# Peak timepoint is Timepoint=="1" for most patients (time of diagnosis and enrollment)
+# CRS patients with pre-CAR-T (Timepoint=="1") and post-CAR-T (Timepoint=="2") samples per protocol
+# Timepoint=="3" is onset of CRS, some severe CRS patients reach peak at Timepoint=="4" per Penn Scale
 olinking_df <- olinking_df %>% mutate(peak_timepoint = case_when(
   Condition=="COVID_healthy" & Timepoint=="1" ~ "Peak",
   Condition=="COVID_minimal" & Timepoint=="1" ~ "Peak",
@@ -30,14 +37,14 @@ olinking_df <- olinking_df %>% mutate(peak_timepoint = case_when(
   Condition=="COVID_severe" & Timepoint=="1" ~ "Peak",
   Condition=="CRS_minimal" & Timepoint=="3" ~ "Peak",
   Condition=="CRS_severe" & Timepoint=="3" ~ "Peak",
-  Condition=="CRS_severe" & Timepoint=="4" & (SubjectID=="CHP959-120" | SubjectID=="CHP959-131" | SubjectID=="CHP959-139") ~ "Peak",
+  Condition=="CRS_severe" & Timepoint=="4" & analysis_sample == TRUE ~ "Peak",
   Condition=="Sepsis_Healthy Control" & Timepoint=="0" ~ "Peak",
   Condition=="Sepsis_MODS" & Timepoint=="1" ~ "Peak"))
 olinking_df %>% group_by(peak_timepoint) %>% count()
 olinking_df %>% group_by(peak_timepoint, Condition) %>% count()
 olinking_df_peak <- filter(olinking_df, peak_timepoint=="Peak")
 
-olinking_data_labels <- read_csv("C:/Users/USER/OneDrive/Documents/Research/Olinking/olink_data_labels.csv")
+olinking_data_labels <- read_csv(here::here("data", "olink_data_labels.csv"))
 olinking_data_labels <- olinking_data_labels %>% filter(Assay != "IL6")
 olinking_df_peak_long <- olinking_df_peak %>%
   pivot_longer(cols = where(is.numeric), names_to = "Assay", values_to = "NPX")
@@ -72,7 +79,11 @@ olinking_df_peak$Condition <- factor(olinking_df_peak$Condition,
                                      levels = names(custom_colors))
 
 # PCA for overall data architecture
-olinking_pca <- PCA(olinking_df_peak[,2:545], ncp = 20, scale.unit = TRUE, graph = FALSE)
+protein_matrix <- olinking_df_peak %>%
+  select(-SubjectID, -Condition, -case_control, -Timepoint, -peak_timepoint) %>%
+  select(where(is.numeric))
+
+olinking_pca <- PCA(protein_matrix, ncp = 20, scale.unit = TRUE, graph = FALSE)
 
 # Extract PC scores for first two components
 pca_scores <- as.data.frame(olinking_pca$ind$coord[, 1:2])
@@ -169,14 +180,15 @@ ggplot(umap_df, aes(x = UMAP1, y = UMAP2, color = Condition)) +
 library(xgboost)
 library(ggplot2)
 
-X_prot <- olinking_df_peak %>%  select(2:545) %>% select(where(is.numeric))
+X_prot <- olinking_df_peak %>%
+  select(-SubjectID, -Condition, -case_control, -Timepoint, -peak_timepoint) %>%
+  select(where(is.numeric))
 stopifnot(nrow(X_prot) == nrow(umap_df))
 
 X_mat <- scale(as.matrix(X_prot))
 feature_names <- colnames(X_mat)
 
 # Spearman correlation across UMAP axes
-
 spearman_rank_axis <- function(axis_vec, X_mat, feature_names) {
   rho <- apply(X_mat, 2, function(v) suppressWarnings(cor(v, axis_vec, method = "spearman")))
   p   <- apply(X_mat, 2, function(v) suppressWarnings(cor.test(v, axis_vec, method = "spearman")$p.value))
@@ -199,15 +211,21 @@ head(spearman_umap2, 20)
 
 ## Run ssGSVA and prepare matrix for heatmap
 library("GSVA")
+library("msigdbr")
 
 # Define gene set
-GSEA_gene_list <- list(
-  HALLMARK_TNFA_SIGNALING_VIA_NFKB = c("ABCA1", "ACKR3", "AREG", "ATF3", "ATP2B1", "B4GALT1", "B4GALT5", "BCL2A1", "BCL3", "BCL6", "BHLHE40", "BIRC2", "BIRC3", "BMP2", "BTG1", "BTG2", "BTG3", "CCL2", "CCL20", "CCL4", "CCL5", "CCN1", "CCND1", "CCNL1", "CCRL2", "CD44", "CD69", "CD80", "CD83", "CDKN1A", "CEBPB", "CEBPD", "CFLAR", "CLCF1", "CSF1", "CSF2", "CXCL1", "CXCL10", "CXCL11", "CXCL2", "CXCL3", "CXCL6", "DENND5A", "DNAJB4", "DRAM1", "DUSP1", "DUSP2", "DUSP4", "DUSP5", "EDN1", "EFNA1", "EGR1", "EGR2", "EGR3", "EHD1", "EIF1", "ETS2", "F2RL1", "F3", "FJX1", "FOS", "FOSB", "FOSL1", "FOSL2", "FUT4", "G0S2", "GADD45A", "GADD45B", "GCH1", "GEM", "GFPT2", "GPR183", "HBEGF", "HES1", "ICAM1", "ICOSLG", "ID2", "IER2", "IER3", "IER5", "IFIH1", "IFIT2", "IFNGR2", "IL12B", "IL15RA", "IL18", "IL1A", "IL1B", "IL23A", "IL6", "IL6ST", "IL7R", "INHBA", "IRF1", "IRS2", "JAG1", "JUN", "JUNB", "KDM6B", "KLF10", "KLF2", "KLF4", "KLF6", "KLF9", "KYNU", "LAMB3", "LDLR", "LIF", "LITAF", "MAFF", "MAP2K3", "MAP3K8", "MARCKS", "MCL1", "MSC", "MXD1", "MYC", "NAMPT", "NFAT5", "NFE2L2", "NFIL3", "NFKB1", "NFKB2", "NFKBIA", "NFKBIE", "NINJ1", "NR4A1", "NR4A2", "NR4A3", "OLR1", "PANX1", "PDE4B", "PDLIM5", "PER1", "PFKFB3", "PHLDA1", "PHLDA2", "PLAU", "PLAUR", "PLEK", "PLK2", "PLPP3", "PMEPA1", "PNRC1", "PPP1R15A", "PTGER4", "PTGS2", "PTPRE", "PTX3", "RCAN1", "REL", "RELA", "RELB", "RHOB", "RIGI", "RIPK2", "RNF19B", "SAT1", "SDC4", "SERPINB2", "SERPINB8", "SERPINE1", "SGK1", "SIK1", "SLC16A6", "SLC2A3", "SLC2A6", "SMAD3", "SNN", "SOCS3", "SOD2", "SPHK1", "SPSB1", "SQSTM1", "STAT5A", "TANK", "TAP1", "TGIF1", "TIPARP", "TLR2", "TNC", "TNF", "TNFAIP2", "TNFAIP3", "TNFAIP6", "TNFAIP8", "TNFRSF9", "TNFSF9", "TNIP1", "TNIP2", "TRAF1", "TRIB1", "TRIP10", "TSC22D1", "TUBB2A", "VEGFA", "YRDC", "ZBTB10", "ZC3H12A", "ZFP36"),
-  HALLMARK_IL6_JAK_STAT3_SIGNALING = c("A2M", "ACVR1B", "ACVRL1", "BAK1", "CBL", "CCL7", "CCR1", "CD14", "CD36", "CD38", "CD44", "CD9", "CNTFR", "CRLF2", "CSF1", "CSF2", "CSF2RA", "CSF2RB", "CSF3R", "CXCL1", "CXCL10", "CXCL11", "CXCL13", "CXCL3", "CXCL9", "DNTT", "EBI3", "FAS", "GRB2", "HAX1", "HMOX1", "IFNAR1", "IFNGR1", "IFNGR2", "IL10RB", "IL12RB1", "IL13RA1", "IL15RA", "IL17RA", "IL17RB", "IL18R1", "IL1B", "IL1R1", "IL1R2", "IL2RA", "IL2RG", "IL3RA", "IL4R", "IL6", "IL6ST", "IL7", "IL9R", "INHBE", "IRF1", "IRF9", "ITGA4", "ITGB3", "JUN", "LEPR", "LTB", "LTBR", "MAP3K8", "MYD88", "OSMR", "PDGFC", "PF4", "PIK3R5", "PIM1", "PLA2G2A", "PTPN1", "PTPN11", "PTPN2", "REG1A", "SOCS1", "SOCS3", "STAM2", "STAT1", "STAT2", "STAT3", "TGFB1", "TLR2", "TNF", "TNFRSF12A", "TNFRSF1A", "TNFRSF1B", "TNFRSF21", "TYK2"),
-  HALLMARK_IL2_STAT5_SIGNALING = c("ABCB1", "ADAM19", "AGER", "AHCY", "AHNAK", "AHR", "ALCAM", "AMACR", "ANXA4", "APLP1", "ARL4A", "BATF", "BATF3", "BCL2", "BCL2L1", "BHLHE40", "BMP2", "BMPR2", "CA2", "CAPG", "CAPN3", "CASP3", "CCND2", "CCND3", "CCNE1", "CCR4", "CD44", "CD48", "CD79B", "CD81", "CD83", "CD86", "CDC42SE2", "CDC6", "CDCP1", "CDKN1C", "CISH", "CKAP4", "COCH", "COL6A1", "CSF1", "CSF2", "CST7", "CTLA4", "CTSZ", "CXCL10", "CYFIP1", "DCPS", "DENND5A", "DHRS3", "DRC1", "ECM1", "EEF1AKMT1", "EMP1", "ENO3", "ENPP1", "EOMES", "ETFBKMT", "ETV4", "F2RL2", "FAH", "FGL2", "FLT3LG", "FURIN", "GABARAPL1", "GADD45B", "GALM", "GATA1", "GBP4", "GLIPR2", "GPR65", "GPR83", "GPX4", "GSTO1", "GUCY1B1", "HIPK2", "HK2", "HOPX", "HUWE1", "HYCC2", "ICOS", "IFITM3", "IFNGR1", "IGF1R", "IGF2R", "IKZF2", "IKZF4", "IL10", "IL10RA", "IL13", "IL18R1", "IL1R2", "IL1RL1", "IL2RA", "IL2RB", "IL3RA", "IL4R", "IRF4", "IRF6", "IRF8", "ITGA6", "ITGAE", "ITGAV", "ITIH5", "KLF6", "LCLAT1", "LIF", "LRIG1", "LRRC8C", "LTB", "MAFF", "MAP3K8", "MAP6", "MAPKAPK2", "MUC1", "MXD1", "MYC", "MYO1C", "MYO1E", "NCOA3", "NCS1", "NDRG1", "NFIL3", "NFKBIZ", "NOP2", "NRP1", "NT5E", "ODC1", "P2RX4", "P4HA1", "PDCD2L", "PENK", "PHLDA1", "PHTF2", "PIM1", "PLAGL1", "PLEC", "PLIN2", "PLPP1", "PLSCR1", "PNP", "POU2F1", "PRAF2", "PRKCH", "PRNP", "PTCH1", "PTGER2", "PTH1R", "PTRH2", "PUS1", "RABGAP1L", "RGS16", "RHOB", "RHOH", "RNH1", "RORA", "RRAGD", "S100A1", "SCN9A", "SELL", "SELP", "SERPINB6", "SERPINC1", "SH3BGRL2", "SHE", "SLC1A5", "SLC29A2", "SLC2A3", "SLC39A8", "SMPDL3A", "SNX14", "SNX9", "SOCS1", "SOCS2", "SPP1", "SPRED2", "SPRY4", "ST3GAL4", "SWAP70", "SYNGR2", "SYT11", "TGM2", "TIAM1", "TLR7", "TNFRSF18", "TNFRSF1B", "TNFRSF21", "TNFRSF4", "TNFRSF8", "TNFRSF9", "TNFSF10", "TNFSF11", "TRAF1", "TTC39B", "TWSG1", "UCK2", "UMPS", "WLS", "XBP1"),
-  HALLMARK_INTERFERON_GAMMA_RESPONSE = c("ADAR", "APOL6", "ARID5B", "ARL4A", "AUTS2", "B2M", "BANK1", "BATF2", "BPGM", "BST2", "BTG1", "C1R", "C1S", "CASP1", "CASP3", "CASP4", "CASP7", "CASP8", "CCL2", "CCL5", "CCL7", "CD274", "CD38", "CD40", "CD69", "CD74", "CD86", "CDKN1A", "CFB", "CFH", "CIITA", "CMKLR1", "CMPK2", "CMTR1", "CSF2RB", "CXCL10", "CXCL11", "CXCL9", "DDX60", "DHX58", "EIF2AK2", "EIF4E3", "EPSTI1", "FAS", "FCGR1A", "FGL2", "FPR1", "GBP4", "GBP6", "GCH1", "GPR18", "GZMA", "HELZ2", "HERC6", "HIF1A", "HLA-A", "HLA-B", "HLA-DMA", "HLA-DQA1", "HLA-DRB1", "HLA-G", "ICAM1", "IDO1", "IFI27", "IFI30", "IFI35", "IFI44", "IFI44L", "IFIH1", "IFIT1", "IFIT2", "IFIT3", "IFITM2", "IFITM3", "IFNAR2", "IL10RA", "IL15", "IL15RA", "IL18BP", "IL2RB", "IL4R", "IL6", "IL7", "IRF1", "IRF2", "IRF4", "IRF5", "IRF7", "IRF8", "IRF9", "ISG15", "ISG20", "ISOC1", "ITGB7", "JAK2", "KLRK1", "LAP3", "LATS2", "LCP2", "LGALS3BP", "LY6E", "LYSMD2", "MARCHF1", "METTL7B", "MT2A", "MTHFD2", "MVP", "MX1", "MX2", "MYD88", "NAMPT", "NCOA3", "NFKB1", "NFKBIA", "NLRC5", "NMI", "NOD1", "NUP93", "OAS2", "OAS3", "OASL", "OGFR", "P2RY14", "PARP12", "PARP14", "PDE4B", "PELI1", "PFKP", "PIM1", "PLA2G4A", "PLSCR1", "PML", "PNP", "PNPT1", "PSMA2", "PSMA3", "PSMB10", "PSMB2", "PSMB8", "PSMB9", "PSME1", "PSME2", "PTGS2", "PTPN1", "PTPN2", "PTPN6", "RAPGEF6", "RBCK1", "RIGI", "RIPK1", "RIPK2", "RNF213", "RNF31", "RSAD2", "RTP4", "SAMD9L", "SAMHD1", "SECTM1", "SELP", "SERPING1", "SLAMF7", "SLC25A28", "SOCS1", "SOCS3", "SOD2", "SP110", "SPPL2A", "SRI", "SSPN", "ST3GAL5", "ST8SIA4", "STAT1", "STAT2", "STAT3", "STAT4", "TAP1", "TAPBP", "TDRD7", "TNFAIP2", "TNFAIP3", "TNFAIP6", "TNFSF10", "TOR1B", "TRAFD1", "TRIM14", "TRIM21", "TRIM25", "TRIM26", "TXNIP", "UBE2L6", "UPP1", "USP18", "VAMP5", "VAMP8", "VCAM1", "WARS1", "XAF1", "XCL1", "ZBP1", "ZNFX1"),
-  HALLMARK_PI3K_AKT_MTOR_SIGNALING = c("ACACA", "ACTR2", "ACTR3", "ADCY2", "AKT1", "AKT1S1", "AP2M1", "ARF1", "ARHGDIA", "ARPC3", "ATF1", "CAB39", "CAB39L", "CALR", "CAMK4", "CDK1", "CDK2", "CDK4", "CDKN1A", "CDKN1B", "CFL1", "CLTC", "CSNK2B", "CXCR4", "DAPP1", "DDIT3", "DUSP3", "E2F1", "ECSIT", "EGFR", "EIF4E", "FASLG", "FGF17", "FGF22", "FGF6", "GNA14", "GNGT1", "GRB2", "GRK2", "GSK3B", "HRAS", "HSP90B1", "IL2RG", "IL4", "IRAK4", "ITPR2", "LCK", "MAP2K3", "MAP2K6", "MAP3K7", "MAPK1", "MAPK10", "MAPK8", "MAPK9", "MAPKAP1", "MKNK1", "MKNK2", "MYD88", "NCK1", "NFKBIB", "NGF", "NOD1", "PAK4", "PDK1", "PFN1", "PIK3R3", "PIKFYVE", "PIN1", "PITX2", "PLA2G12A", "PLCB1", "PLCG1", "PPP1CA", "PPP2R1B", "PRKAA2", "PRKAG1", "PRKAR2A", "PRKCB", "PTEN", "PTPN11", "RAC1", "RAF1", "RALB", "RIPK1", "RIT1", "RPS6KA1", "RPS6KA3", "RPTOR", "SFN", "SLA", "SLC2A1", "SMAD2", "SQSTM1", "STAT2", "TBK1", "THEM4", "TIAM1", "TNFRSF1A", "TRAF2", "TRIB3", "TSC2", "UBE2D3", "UBE2N", "VAV3", "YWHAB")
+hallmark_immune_pathways <- c(
+  "HALLMARK_TNFA_SIGNALING_VIA_NFKB",
+  "HALLMARK_IL6_JAK_STAT3_SIGNALING",
+  "HALLMARK_IL2_STAT5_SIGNALING",
+  "HALLMARK_INTERFERON_GAMMA_RESPONSE",
+  "HALLMARK_PI3K_AKT_MTOR_SIGNALING"
 )
+
+hallmark_msigdb <- msigdbr(species = "Homo sapiens", category = "H")
+GSEA_gene_list <- split(hallmark_msigdb$gene_symbol, hallmark_msigdb$gs_name)
+GSEA_gene_list <- lapply(GSEA_gene_list, unique)
+GSEA_gene_list <- GSEA_gene_list[hallmark_immune_pathways]
 
 # Create matrix
 proteomic_matrix <- olinking_df_peak_long %>%
@@ -297,7 +315,7 @@ kw_results <- kw_results %>% arrange(p_adj)
 kw_results
 
 library(writexl)
-write_xlsx(kw_results, "Supplemental Digital content 2.xlsx")
+write_xlsx(kw_results, here::here("output", "Supplemental Digital content 2.xlsx"))
 
 # Dunn's post-hoc cross-condition pairwise comparisons w/ BH correction
 dunn_raw <- gsva_long %>%
@@ -312,7 +330,7 @@ dunn_results
 
 dunn_results %>% filter(p_adj_global < 0.05)
 
-write_xlsx(dunn_results, "Supplemental Digital content 3.xlsx")
+write_xlsx(dunn_results, here::here("output", "Supplemental Digital content 3.xlsx"))
 
 # Row normalize and then create heatmap
 # Define row-wise min-max normalization function
@@ -329,22 +347,6 @@ gsva_scores_rescaled <- apply(gsva_scores, 1, min_max_scale)
 library(ComplexHeatmap)
 library(circlize)
 library(grid)
-
-selected_pathways <- c(
-  "HALLMARK_TNFA_SIGNALING_VIA_NFKB", 
-  "HALLMARK_IL6_JAK_STAT3_SIGNALING", 
-  "HALLMARK_IL2_STAT5_SIGNALING", 
-  "HALLMARK_INTERFERON_GAMMA_RESPONSE", 
-  "HALLMARK_PI3K_AKT_MTOR_SIGNALING"
-)
-
-geneset_names <- c(
-  "HALLMARK_TNFA_SIGNALING_VIA_NFKB" = "Hallmark TNFa Signaling via NFKB",
-  "HALLMARK_IL6_JAK_STAT3_SIGNALING" = "Hallmark IL6-JAK-STAT3 Signaling",
-  "HALLMARK_IL2_STAT5_SIGNALING" = "Hallmark IL2-STAT5 Signaling",
-  "HALLMARK_INTERFERON_GAMMA_RESPONSE" = "Hallmark IFNg Response",
-  "HALLMARK_PI3K_AKT_MTOR_SIGNALING" = "Hallmark PI3K-AKT-mTOR Signaling"
-)
 
 # Subset and rename matrix rows
 gsva_scores_rescaled <- t(gsva_scores_rescaled)
@@ -380,17 +382,6 @@ group_colors <- c(
 )
 
 # Create column & row annotation
-column_annotation1 <- HeatmapAnnotation(
-  Group = condition_factor,
-  col = list(Group = group_colors),
-  show_legend = TRUE,
-  annotation_legend_param = list(
-    title = "Condition",
-    title_gp = gpar(fontsize = 12, fontface = "bold"),
-    labels_gp = gpar(fontsize = 10)
-  )
-)
-
 col_fun <- colorRamp2(c(-1, 0, 1), c("blue", "white", "red"))
 
 ha_col <- HeatmapAnnotation(
@@ -441,9 +432,7 @@ ComplexHeatmap::Heatmap(gsva_scores_ordered,
     row_dend_gp = gpar(lwd = 3),
     heatmap_legend_param = list(title = "Normalized NES", legend_height = unit(4, "cm")))
 
-
 ## Radar graph to see overlap between Sepsis, MIS-C, and CRS Severe
-library(tidyr)
 library(fmsb)
 
 # Convert GSVA matrix to long format
@@ -544,7 +533,7 @@ params <- list(
   gamma = 1
 )
 
-# Train XGBoost using repeated stratified 5-fold CV (no bootstrap) for feature-importance stability
+# Train XGBoost using repeated stratified 5-fold CV (no bootstrap) for feature-importance
 set.seed(3158)
 feature_names <- colnames(features)
 
@@ -606,7 +595,6 @@ top10_MISC <- data.frame(
 
 top10_MISC
 
-
 ##----------------------------------------------------------------------------##
 
 ## Use XGBoost to identify minimal set of proteins that differentiate CRS Severe from Sepsis
@@ -654,7 +642,7 @@ params <- list(
   gamma = 1
 )
 
-# Train XGBoost using repeated stratified 5-fold CV (no bootstrap) for feature-importance stability
+# Train XGBoost using repeated stratified 5-fold CV (no bootstrap) for feature-importance
 set.seed(3158)
 features_names1 <- colnames(features1)
 
